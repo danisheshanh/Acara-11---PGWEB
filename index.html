@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebGIS - Flores Timur (GeoServer + LeafletJS)</title>
+    <title>WebGIS - Aceh (GeoServer + LeafletJS)</title>
 
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -52,19 +52,48 @@
             display: block;
             margin-top: 3px;
         }
+
+        .legend-category {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 5px;
+            font-size: 12px;
+        }
+
+        .legend-category svg {
+            display: block;
+        }
+
+        #map-error {
+            position: absolute;
+            z-index: 1000;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            max-width: 80%;
+            padding: 8px 12px;
+            border-radius: 4px;
+            background: #fff;
+            color: #991b1b;
+            box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+            font-size: 13px;
+        }
     </style>
 </head>
 
 <body>
 
-    <div id="map"></div>
+    <div id="map">
+        <div id="map-error" role="status" hidden></div>
+    </div>
 
     <!-- Leaflet JavaScript -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
-        // 1. Inisialisasi Peta (Pusat di Flores Timur)
-        var map = L.map("map").setView([-8.32, 122.98], 10);
+        // 1. Inisialisasi Peta (Pusat di Aceh)
+        var map = L.map("map").setView([4.7, 96.5], 8);
 
         // 2. Basemap OpenStreetMap
         var osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -72,22 +101,92 @@
             attribution: '&copy; OpenStreetMap contributors'
         }).addTo(map);
 
-        // 3. Layer WMS GeoServer
-        var wmsBatasKecamatan = L.tileLayer.wms("http://localhost:8080/geoserver/pg_web/wms", {
+        // 3. Data struktur energi via WFS; layer lainnya menggunakan WMS
+        var geoserverWmsUrl = "http://localhost:8080/geoserver/pg_web/wms";
+        var energyTypes = [
+            { id: "gardu", label: "Gardu Induk", prefix: "GARDU", fill: "#7b70b7" },
+            { id: "plta", label: "PLTA (Air)", prefix: "PLTA", fill: "#aa5fc1" },
+            { id: "pltd", label: "PLTD (Diesel)", prefix: "PLTD", fill: "#78c967" },
+            { id: "pltg", label: "PLTG (Gas)", prefix: "PLTG", fill: "#e63380" },
+            { id: "pltp", label: "PLTP (Panas Bumi)", prefix: "PLTP", fill: "#dce82a" },
+            { id: "plts", label: "PLTS (Surya)", prefix: "PLTS", fill: "#48a9c8" },
+            { id: "pltu", label: "PLTU (Uap/Batubara)", prefix: "PLTU", fill: "#5bd29e" }
+        ];
+
+        function getEnergySymbol(type, size) {
+            return '<svg width="' + size + '" height="' + size + '" viewBox="0 0 24 24" ' +
+                'aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8" fill="' +
+                type.fill + '" stroke="#4b5563" stroke-width="1.5"/></svg>';
+        }
+
+        function findEnergyType(feature) {
+            var name = feature.properties && feature.properties.namobj;
+            if (typeof name !== "string") {
+                return null;
+            }
+
+            var normalizedName = name.trim().toUpperCase();
+            return energyTypes.find(function (type) {
+                return normalizedName.indexOf(type.prefix) === 0;
+            }) || null;
+        }
+
+        var energyFeatureLayer = L.geoJSON(null, {
+            pointToLayer: function (feature, latlng) {
+                var type = findEnergyType(feature);
+                return L.circleMarker(latlng, {
+                    radius: 5,
+                    color: "#4b5563",
+                    weight: 1,
+                    fillColor: type ? type.fill : "#64748b",
+                    fillOpacity: 1
+                });
+            },
+            onEachFeature: function (feature, layer) {
+                var name = feature.properties && feature.properties.namobj;
+                if (typeof name === "string" && name.length > 0) {
+                    var popupContent = document.createElement("span");
+                    popupContent.textContent = name;
+                    layer.bindPopup(popupContent);
+                }
+            }
+        });
+
+        fetch("struktur_aceh.php")
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error("Permintaan data gagal (HTTP " + response.status + ").");
+                }
+                return response.json();
+            })
+            .then(function (geojson) {
+                if (!geojson || geojson.type !== "FeatureCollection" || !Array.isArray(geojson.features)) {
+                    throw new Error("Respons GeoServer bukan GeoJSON FeatureCollection yang valid.");
+                }
+                energyFeatureLayer.addData(geojson).addTo(map);
+            })
+            .catch(function (error) {
+                console.error("Gagal memuat data struktur energi:", error);
+                var errorElement = document.getElementById("map-error");
+                errorElement.textContent = "Data struktur energi gagal dimuat. Pastikan GeoServer aktif.";
+                errorElement.hidden = false;
+            });
+
+        var wmsBatasKecamatan = L.tileLayer.wms(geoserverWmsUrl, {
             layers: "pg_web:batas_kecamatan",
             format: "image/png",
             transparent: true,
             version: "1.1.0"
         }).addTo(map);
 
-        var wmsJalan = L.tileLayer.wms("http://localhost:8080/geoserver/pg_web/wms", {
+        var wmsJalan = L.tileLayer.wms(geoserverWmsUrl, {
             layers: "pg_web:jalan",
             format: "image/png",
             transparent: true,
             version: "1.1.0"
         }).addTo(map);
 
-        var wmsSungai = L.tileLayer.wms("http://localhost:8080/geoserver/pg_web/wms", {
+        var wmsSungai = L.tileLayer.wms(geoserverWmsUrl, {
             layers: "pg_web:sungai",
             format: "image/png",
             transparent: true,
@@ -108,11 +207,17 @@
             var div = L.DomUtil.create('div', 'info legend');
             div.innerHTML = '<h4>Legenda Peta</h4>';
 
-            var urlKecamatan = "http://localhost:8080/geoserver/wms?REQUEST=GetLegendGraphic&VERSION=1.0.0&FORMAT=image/png&LAYER=pg_web:batas_kecamatan";
-            var urlJalan = "http://localhost:8080/geoserver/wms?REQUEST=GetLegendGraphic&VERSION=1.0.0&FORMAT=image/png&LAYER=pg_web:jalan";
-            var urlSungai = "http://localhost:8080/geoserver/wms?REQUEST=GetLegendGraphic&VERSION=1.0.0&FORMAT=image/png&LAYER=pg_web:sungai";
+            var urlKecamatan = geoserverWmsUrl + "?REQUEST=GetLegendGraphic&VERSION=1.0.0&FORMAT=image/png&LAYER=pg_web:batas_kecamatan";
+            var urlJalan = geoserverWmsUrl + "?REQUEST=GetLegendGraphic&VERSION=1.0.0&FORMAT=image/png&LAYER=pg_web:jalan";
+            var urlSungai = geoserverWmsUrl + "?REQUEST=GetLegendGraphic&VERSION=1.0.0&FORMAT=image/png&LAYER=pg_web:sungai";
 
             // Mengelompokkan item legenda dengan ID sesuai masing-masing layer
+            var energyLegend = energyTypes.map(function (type) {
+                return '<div class="legend-category">' + getEnergySymbol(type, 18) +
+                    '<span>' + type.label + '</span></div>';
+            }).join("");
+            div.innerHTML += '<div class="legend-item" id="legend-struktur-aceh"><b>Jenis Struktur Energi</b>' +
+                energyLegend + '</div>';
             div.innerHTML += '<div class="legend-item" id="legend-kecamatan"><b>Batas Kecamatan</b><br><img src="' + urlKecamatan + '"></div>';
             div.innerHTML += '<div class="legend-item" id="legend-jalan"><b>Jaringan Jalan</b><br><img src="' + urlJalan + '"></div>';
             div.innerHTML += '<div class="legend-item" id="legend-sungai"><b>Jaringan Sungai</b><br><img src="' + urlSungai + '"></div>';
@@ -128,6 +233,7 @@
         };
 
         var overlayMaps = {
+            "Struktur Energi": energyFeatureLayer,
             "Batas Kecamatan": wmsBatasKecamatan,
             "Jaringan Jalan": wmsJalan,
             "Jaringan Sungai": wmsSungai
@@ -137,7 +243,9 @@
 
         // 7. Event Handler untuk Sinkronisasi Centang Layer dengan Legenda
         map.on('overlayadd', function (eventLayer) {
-            if (eventLayer.name === "Batas Kecamatan") {
+            if (eventLayer.name === "Struktur Aceh") {
+                document.getElementById("legend-struktur-aceh").style.display = "block";
+            } else if (eventLayer.name === "Batas Kecamatan") {
                 document.getElementById("legend-kecamatan").style.display = "block";
             } else if (eventLayer.name === "Jaringan Jalan") {
                 document.getElementById("legend-jalan").style.display = "block";
@@ -147,7 +255,9 @@
         });
 
         map.on('overlayremove', function (eventLayer) {
-            if (eventLayer.name === "Batas Kecamatan") {
+            if (eventLayer.name === "Struktur Aceh") {
+                document.getElementById("legend-struktur-aceh").style.display = "none";
+            } else if (eventLayer.name === "Batas Kecamatan") {
                 document.getElementById("legend-kecamatan").style.display = "none";
             } else if (eventLayer.name === "Jaringan Jalan") {
                 document.getElementById("legend-jalan").style.display = "none";
